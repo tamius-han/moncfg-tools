@@ -1,0 +1,178 @@
+#!/bin/bash
+
+# moncfg
+# 
+# a fancy wrapper for xrandr that has a bit nicer syntax.
+# works with dual-monitor setups only.
+# 
+# It's generally replaced by moncfg-lite and potentially uncompatible with mond
+
+
+echo "Moncfg v0.2"
+
+defaultDisplay="DP-2"
+
+
+
+
+connectedDisplays=$(xrandr | grep " connected" | grep -v -c "$defaultDisplay")
+externalDisplay=$(xrandr | grep " connected" | grep -v "$defaultDisplay " | awk '{print $1}')
+debug=$(echo "$@" | grep -i -c "debug")
+save=$(echo "$@" | egrep -i -c "save|-s")
+
+
+echo "-------------"
+echo "Default display:  $defaultDisplay"
+echo "# of connected:   $connectedDisplays"
+echo "external display: $externalDisplay"
+echo "Debug?            $debug"
+echo "Save config?      $save"
+echo "-------------"
+
+
+working=""   #Here'll be the name of the display we're configuring
+other=""     #Here'll be the name of the other display
+
+cmd=""    #This is the command string
+
+
+
+
+if [[ $1 == "help" ]] || [[ $1 == "-h" ]] || [[ $1 == "--help" ]] ; then
+  echo "$0 help:"
+  echo ""
+  echo "Usage: $0 monitor [options]"
+  echo ""
+ printf \
+"monitor can either be 'default' ('$defaultDisplay', edit this script if this\n\
+is not true) or 'external' (i.e. not default). PLEASE NOTE: this script doesn't\n\
+support configurations with more than 2 monitors.\n\n\
+Options: off  - turns the specified monitor off\n\
+         only - turns the other monitor off\n\
+         left,right,up,above,down,below,same,dup\n\
+              - specifies the position of the specified monitor (relative to the\n\
+                other one\n\
+         flip normal,x,y,xy\n\
+              - flips the image over specified axis. This option takes additional\n\
+                argument (normal, x, y, xy)\n\
+         rotate normal,0;\n\
+                left,ccw,-90,270;\n\
+                inverted,flip,ud,180\n\
+                right,cw,90\n\
+              - rotates the display by 0, 90, 180 or 270°. See above groups of valid\n\
+                options for achieving these four results.\n\
+         main - the specified output becomes the primary output\n\
+         save - saves [options] as default configuration for current monitor.\n"  
+  exit
+fi
+
+
+# First we deal with rogue monitors
+
+read -a arr <<< "$(xrandr  | grep -v $defaultDisplay | grep -n "connected" | sed s/:/\ /g | awk '{print $1" "$2}' | tr '\n' ' ')" 
+    
+arr[${#arr[@]}]=$(xrandr | grep -v $defaultDisplay | wc -l)
+for((i=0; i < ${#arr[@]}; i+=2)) ; do
+  in=$(( $i + 2))
+  imon=$(( $i + 1))
+  
+  if [[ $(( ${arr[$in]} - ${arr[$i]} )) -gt 1 ]] && [ "${arr[$imon]}" != "$externalDisplay" ] ; then
+    echo "A rogue monitor (${arr[$imon]}; line: ${arr[$i]}, next: ${arr[$in]}) detected! Disabling."
+    xrandr --output ${arr[$imon]} --off
+    fi
+done
+
+if [ -z $externalDisplay ] ; then
+  exit 0;
+fi
+
+while [[ $# -gt 0 ]] ; do
+  if [[ $debug -eq 1 ]] ; then
+    echo "Debug - arg#: $#"
+  fi
+  
+  if [ "$1" == "external" ] ; then
+    if [ ! -z $cmd ] ; then
+      xrandr "$cmd"
+      cmd=""
+    fi
+    
+    working="$externalDisplay"
+    other="$defaultDisplay"
+    
+    cmd="--output $working"
+    shift 1;
+  elif [ "$1" == "default" ] ; then
+    working="$defaultDisplay"
+    other="$externalDisplay"
+    
+    cmd="--output $working"
+    shift 1;
+  elif [ "$1" == "off" ] ; then
+    xrandr --output $working --off
+    moncfg-auto $other
+    shift 1;
+  elif [ "$1" == "only" ] ; then
+    xrandr --output $other --off
+    moncfg-auto $working
+    shift 1;
+  elif [ "$1" == "left" ] ; then                                   ### POSITIONS ###
+    cmd="$cmd --left-of $other --auto"
+    shift 1;
+  elif [ "$1" == "right" ] ; then
+    cmd="$cmd --right-of $other --auto"
+    shift 1;
+  elif [ "$1" == "up" ] || [ "$1" == "above" ] ; then
+    cmd="$cmd --above $other --auto"
+    shift 1;
+  elif [ "$1" == "down" ] || [ "$1" == "below" ] ; then
+    cmd="$cmd --below $other --auto"
+    shift 1;
+  elif [ "$1" == "dup" ] || [ "$1" == "duplicate" ] || [ "$1" == "same" ] || [ "$1" == "same-as" ] ; then
+    cmd="$cmd --same-as $other --auto"
+    shift 1;
+  
+  elif [ "$1" == "flip" ] &&  [[ $# -ge 2 ]] ; then                ### MIRROR ###
+    mirr=$2
+    if [ "$mirr" == "nor" ] || [ "$mirr" == "no" ] ; then
+      mirr="normal"
+    fi
+    cmd="$cmd --reflect $mirr"
+    shift 2;
+  elif [ "$1" == "rotate" ] && [[ $# -ge 2 ]] ; then               ### ROTATE ###
+    rot=$2
+    if [ "$rot" == "nor" ] || [ "$rot" == "no" ] || [ "$rot" == "0" ] ; then    # Normal pos
+      rot="normal"
+    elif [ "$rot" == "left" ] || [ "$rot" == "ccw" ] || [ "$rot" == "-90" ] || [ "$rot" == "270" ] ; then 
+      rot="left"
+    elif [ "$rot" == "flip" ] || [ "$rot" == "inverted" ] || [ "$rot" == "ud" ] ||  [ "$rot" == "180" ] ; then
+      rot="inverted"
+    elif [ "$rot" == "right" ] || [ "$rot" == "cw" ] || [ "$rot" == "90" ] ; then
+      rot="right"
+    fi
+    cmd="$cmd --rotate $rot"
+    shift 2;
+  elif [ "$1" == "main" ] ; then                                   ### MAIN ###
+    cmd="$cmd --primary"
+    shift 1;
+  else
+    shift 1;
+    continue;
+  fi
+done
+
+if [[ $debug -eq 1 ]] ; then
+  echo "cmd:   $cmd"
+fi
+if [ -z "$cmd" ] ; then
+  exit
+fi
+if [[ $save -eq 1 ]] ; then
+  moncfg-auto save "$@"
+fi
+xrandr $cmd 
+exit
+
+
+
+

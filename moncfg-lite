@@ -1,0 +1,106 @@
+#!/bin/bash
+
+# moncfg-lite: 
+# preprost skript za konfiguracijo većzaslonskega okolja (na kde/plasma5). 
+# Avtor:  Tamius Han
+# e-mail: tamius.han@gmail.com
+# 
+# moncfg-lite:
+# a simple script for dealing with multi-monitor environment. Designed for plasma5.
+# Author: Tamius Han
+# e-mail: tamius.han@gmail.com
+# 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+#
+# Stvari, ki jih je potrebno skonfigurirati:
+# Stuff that you need to configure:
+#
+# PRIVZETI ZASLONI. Prvi zaslon na seznamu je privzeti zaslon. Če prvi zaslon ni priklopljen,
+# je privzet drugi zaslon na seznamu, itd. (Če ostane priklopljen samo še en zaslon, potem bo
+# ta zaslon postal privzeti zaslon ne glede na to, ali je na spodnjem seznamu)
+# 
+# DEFAULT MONITORS. First display on the list is the default display. If the first display on that
+# list is unplugged, the next display on the list will be default. (Please note that if we're left
+# with a single connected display, that display will be made primary regardless of whether it's 
+# actually in this list or not)
+DEFAULT_DISPLAYS=('HDMI-0' 'DP-2')
+
+# VRSTNI RED ZASLONOV: Na seznamu je vrstni red zaslonov od leve proti desni.
+# 
+# DISPLAY ORDER: Monitors should be listed from the leftmost to the rightmost.
+DISPLAY_ORDER=('HDMI-0' 'DP-2' 'VGA-0')  
+
+# Pogledamo, ali nam ostaja samo en zaslon
+# Let's check if there's only one display remaining
+if [ $(xrandr | grep " connected" -c) -le 1 ] ; then 
+  
+  # Ugasnemo vse odklopljene outpute
+  # We turn off all disconnected monitors.
+  for i in $(xrandr | grep "disconnected" | awk {'print $1'}) ; do
+    xrandr --output "$i" --off 
+  done
+  
+  xrandr --output $(xrandr | grep " connected" | awk {'print $1'}) --auto --primary
+  
+  sleep 1
+  kwin_x11 --replace 1>/dev/null 2>/dev/null &
+  sleep 2
+  plasmashell 1>/dev/null 2>/dev/null &
+  exit 0
+fi
+
+
+# določimo, kateri zaslon bo glavni.
+# The primary display is determined here.
+for i in ${DEFAULT_DISPLAYS[@]} ; do
+  if xrandr | grep -q "$i connected" ; then
+    default=$i
+    break
+  fi
+done
+
+# Ugasnemo vse odklopljene outpute
+# We turn off all disconnected monitors
+for i in $(xrandr | grep "disconnected" | awk {'print $1'}) ; do
+  xrandr --output "$i" --off 
+done
+
+
+# Postavimo zaslone
+# Začnemo z najbolj levim
+#
+# We configure the monitors, starting with the leftmost.
+c="0"
+for i in ${DISPLAY_ORDER[@]} ; do
+  if xrandr | grep -q "$i connected" ; then
+    if [ $c == "0" ] ; then
+      xrandr --output $i --auto
+    else
+      xrandr --output $i --right-of $last
+    fi
+    
+    c="1"
+    last="$i"
+  fi
+done
+
+# Nastavimo glavni ekran
+#
+# Let's set the primary output.
+xrandr --output $default --primary
+
+
+
+# Na koncu še resetiramo plasmashell. Če ga ne resetiramo, potem se včasih zgodi, da 
+# dobimo pulte na napačnih zaslonih. Plasmashell se mora restartati šele po tistem, 
+# ko se je sistem (kwin, itd) prilagodil na novo ločljivost namizja, zato pred ponovnim
+# zagonom počakamo nekaj časa.
+#
+# We finish by restarting plasmashell as panels have a bad habit of ending up on the wrong
+# monitors if plasmashell isn't restarted. We have to restart plasmashell after the system
+# took note of our new desktop resolution (xrandr finishes before kwin adapts to the new
+# configuration), which is why we wait a bit.
+sleep 3
+
+killall -9 plasmashell
+plasmashell 1>/dev/null 2>/dev/null &

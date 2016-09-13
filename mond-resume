@@ -1,0 +1,6 @@
+#!/bin/bash
+ 
+for i in $(ps aux | grep "/bin/bash" | egrep "/mond$" | awk {'print $2'}) ; do
+  kill -SIGUSR2 $i
+done
+

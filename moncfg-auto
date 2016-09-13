@@ -1,0 +1,113 @@
+#!/bin/bash
+
+# moncfg-auto: utility to auto-reconfigure your monitor layouts
+# 
+# While we wait for Plasma 5 to become usable.
+
+# Yeah you need to edit this script as well. 
+#
+defaultDisplay="DP-2"
+
+# You can specify directory for your configurations here:
+cfgdir=~/.config/moncfg
+
+
+
+# Actual script
+main=$defaultDisplay
+connected=1
+xrandr --output $main --auto
+
+mkdir -p $cfgdir
+
+function getEDID {
+  if connectedDisplays=$(xrandr | grep -v $main | grep -q " connected") ; then     
+    for i in $(find /sys edid 2>/dev/null | grep -i edid | grep "drm/car" | grep -v -i $main ) ; do 
+      
+      if [ "$(cat "${i%/*}/status" )" == "connected" ] ; then
+        cat $i | head -c 20 | tail -c 10 | od -x | cut -d ' ' -f 2- | head -1
+      fi
+    done
+    return 0;
+  else
+    return 1;
+  fi
+}
+
+function loop {
+  while(true) ; do      
+    ncon=$(xrandr | grep -c " connect")
+    
+    if [ $ncon -gt $connected ] ; then
+      edid=$(getEDID)
+      if [ -f "$cfgdir/$edid" ] ; then
+        echo "Found settings for monitor with edid: '$edid'!"
+        moncfg $(cat "$cfgdir/$edid" )
+      else
+        echo "No settings found for this monitor ($edid), using defaults."
+        echo "You can change defaults with '$0 set-defaults [options]'"
+        echo "You can set special settings for this monitor using 'moncfg [options] save'"
+        moncfg $(cat $cfgdir/default)
+        cp "$cfgdir/default" "$cfgdir/$edid"
+      fi
+      
+      #Reševanje hroščov v plasmashell
+      killall -9 plasmashell
+      plasmashell &
+      
+    elif [ $ncon -lt $connected ] ; then
+      echo "A monitor was unplugged!"
+      moncfg external off
+      
+      ########################## NOTE: to spodaj rešuje težave, ki jih imata nvidia in kwin_x11 ob
+      ##########################       odklapljanju drugega zaslona 
+      kwin_x11 --replace
+      killall -9 plasmashell
+      plasmashell &
+    fi 
+    
+    connected=$ncon;
+    
+    if [ -z $1 ] ; then
+      if [ $ncon -eq $connected ] ; then 
+        moncfg external off
+        
+        ########################## NOTE: to spodaj rešuje težave, ki jih imata nvidia in kwin_x11 ob
+        ##########################       odklapljanju drugega zaslona 
+        kwin_x11 --replace        
+        killall -9 plasmashell
+        plasmashell &
+      fi
+      exit 0
+    fi
+    sleep 5
+  done
+}
+
+onlyrun=""
+
+# main loop - if ran without arguments
+if [[ $# -eq 0 ]] ; then
+  loop
+fi #If there are arguments
+
+if [ "$1" == "-d" ] || [ "$1" == "loop" ] ; then
+  loop 1 &
+  exit 0
+elif [ "$1" == "save" ] ; then
+    if [ -z "$2" ] ; then
+      echo "'save' option needs a valid config as the second argument!"
+      exit 1
+    fi
+    edid=$(getEDID)
+    if $? ; then
+      echo "$2" > "$cfgdir/$edid"
+    fi
+  elif [ "$1" == "set-default" ] ; then
+    shift 1;
+    echo "$@" > "$cfgdir/default"
+    echo "Saved the following to '$cfgdir/default': $@"
+  else
+    echo "Unrecognized option: $1"
+  fi
+fi

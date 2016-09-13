@@ -1,0 +1,25 @@
+#!/bin/bash
+
+#Kdo gleda gledejpse?
+
+sleep 15;
+
+source colors.sh
+echo "Kdo gleda glejpse?"
+printf "$Blue$(date)$Color_Off | mondmond is starting!\n" >> /tmp/mondmond.log
+
+while(true) ; do
+  
+  if [[ $(ps aux  | grep -v grep | grep "/bin/bash" | egrep "/mond$" | wc -l) -lt 1 ]] ; then
+    printf "$Blue$(date)$Color_Off | mond stopped running for some reason. restarting\n" >>/tmp/mondmond.log
+    $HOME/.scripts/mond 1>>/tmp/mond.log &
+  fi
+  
+  while [ $(ps aux | grep -v grep | grep "/bin/bash" | egrep "/mondmond$" | wc -l) -lt 3 ] ; do
+    printf "$Blue$(date)$Color_Off | less than three mond instances running. Launching another instance.\n"
+    $HOME/.scripts/mondmond >> /tmp/mondmond.log &
+    sleep 5;
+  done
+  
+  sleep 60;
+done

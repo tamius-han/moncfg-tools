@@ -1,0 +1,211 @@
+#!/bin/bash
+
+# mond - daemon that monitors kwin and other bullshits
+#
+#
+# Dependencies: 
+# 
+#      colors.sh    - for Output of Color
+#      xdotool      - for enforcing compositing 
+#      moncfg-lite  - handles monitor reconfiguration
+#      kde          - this script is pretty much designed to be used
+#                   - with kde/plasma5
+#
+# NOTE: This has only been tested on single and dual-monitor setups. Untested and probably somewhat broken
+#       on 3+ monitor setups.
+# NOTE: This script assumes one row of monitors, like this:
+#           
+#           [ mon 1 ] [ mon 2 ]
+#       
+#       If your monitors are arranged like this:
+#       
+#           [ mon 1 ]
+#           [ mon 2 ]
+#            
+#       chances are this script won't work.     
+
+displaycnt=$(xrandr | grep -c " connected");
+
+firstrun=1
+mark_for_reconfig=0
+test=0
+noloop=0
+
+source colors.sh
+
+if echo $@ | grep -q "test" ; then
+  test=1
+  if echo $@ | grep -q "noloop" ; then
+    noloop=1
+  fi
+fi
+  
+
+
+printf "$Blue$(date)$Color_Off | mond started (pid: ${Yellow}$$${Color_Off})\n" 
+
+while (true) ; do
+  trap 'skipchecks=1; notify-send "Pausing mond"; printf "${Red}$(date)${Color_Off} | mond was paused\n" | tee -a /tmp/mond.log' SIGUSR1
+  trap 'skipchecks=0; notify-send "Resuming mond"; printf "${Green}$(date)${Color_Off} | mond was resumed\n" | tee -a /tmp/mond.log' SIGUSR2
+  
+  if [[ $skipchecks -eq 1 ]] ; then
+    sleep 10
+    mark_for_reconfig=0
+    continue
+  fi
+  
+  stimer=10;
+  ndcnt=$(xrandr | grep -c " connected");
+  if [ $firstrun -eq 1 ] ; then
+    displaycnt=$ndcnt
+    firstrun=0
+  fi
+
+
+  oldmon=("${monitors[@]}")
+#   oldres=("${resolutions[@]}")
+  unset monitors;
+#   unset resolutions;
+  
+  for i in $(xrandr | grep " connected" | awk {'print $1'}) ; do
+    monitors+=($i);
+  done
+  
+  for i in ${monitors[@]} ; do    
+    #Če priporočena ločljivost != dejanska ločljivost, označimo za spremembo
+    #If reccomended resolution != resolution we're currently using, we mark for change
+    #
+    # TODO: this could be potentially problematic as legit 4k TVs sometimes prefer 1080p over 4k. 
+    # The script should probably prefer max resolution over reccomended.
+    # 
+    # We should probably add a way to pause script when we don't want it running as well.
+    if xrandr | sed -n -e "/$i connected/,/connected/ p" | grep "*" | grep -vq "+" ; then 
+      mark_for_reconfig=1;
+      echo "One of the monitors is not running at reccomended resolution; marking for reconfig" 
+    fi
+  done
+
+  width=0
+  desktopwidth=$(xrandr | head -1 | awk '{print $8}')
+  
+  for i in $(xrandr | grep "*" | cut -f1 -d"x") ; do
+    width=$(( $width + $i ))
+  done
+  
+  #Če obstaja kakšna luknja med ekrani, potem označimo za spremembo
+  
+  # If you swap two monitors of different resolutions, a "hole" might appear between them. For example, if your
+  # configuration looks like this:
+  # 
+  #           Desktop: 4480x1080
+  #  |----------------------------------|
+  #  ____________________________________
+  #  |                   ||             |
+  #  |     MONITOR 2     ||  MONITOR 1  |
+  #  |     2560x1080     ||  1920x1080  |
+  #  |___________________||_____________|
+  #
+  # and you swap monitor 2 for another 1920x1080 monitor, then your desktop could end up looking like this:
+  #
+  #           Desktop: 4480x1080 (still)
+  #  |----------------------------------|
+  #  ________________     _______________
+  #  |              |     |             |
+  #  |  MONITOR 2   |     |  MONITOR 1  |
+  #  |  1920x1080   |     |  1920x1080  |
+  #  |______________|     |_____________|
+  #                  AAAAA
+  #               EMPTY SPACE
+  #
+  # We're getting rid of this empty space here. Obviously script was designed with this specific monitor layout
+  # in mind.
+  
+  if [ $desktopwidth -ne $width ] ; then
+    printf "$Blue$(date)$Color_Off | Gap between monitors detected, will reconfigure.\n"
+    echo "desktop width: $desktopwidth | combined width of monitors: $width"
+    mark_for_reconfig=1;
+  fi
+  
+  
+  # Pogledamo, če so stvari zagnane. Če kaj od tega ne teče, potem zaženemo
+  
+  # Let's see what's running and what's not. We launch things that aren't running.
+  if ! ps aux | grep -v grep | grep -q "kwin_x11" ; then
+    printf "${Blue}$(date)$Color_Off | kwin not running (process not found). Trying to relaunch.\n" >> /tmp/mond.log
+    kwin_x11 --replace 2>&1 1>/dev/null &
+  fi
+  
+  if ! ps aux | grep -v grep | grep -q "krunner" ; then
+    krunner 2>&1 1>/dev/null &
+  fi
+  
+  if ! ps aux | grep -v grep | grep -q "plasmashell" ; then
+    plasmashell 2>&1 1>/dev/null &
+  fi
+  
+  # Pogledamo, če so stvari usute. Če so, jih ponovno zaženemo
+  
+  # Some things have a bad habit of crashing. If they're in a crashed state, we restart them.
+  if ps aux | grep Tl | grep -q krunner ; then
+    for i in $(ps aux | grep Tl | grep krunner | awk {'print $2'}); do
+      kill -9 $i
+    done
+    krunner 1>&2 2>/dev/null &
+  fi
+  if ps aux | grep Tl | grep -q kwin ; then
+    for i in $(ps aux | grep Tl | grep kwin | awk {'print $2'}); do
+      kill -9 $i
+    done
+    kwin_x11 --replace 2>&1 1>/dev/null &
+    sleep 5
+    if [ $test -eq 0 ] ; then
+      moncfg-lite &
+    fi
+    notify-send "Kwin crashed and was restarted"
+    printf "$Blue$(date)$Color_Off | Kwin crashed and was restarted\n" >> /tmp/mond.log
+    sleep 10  
+  elif [ $mark_for_reconfig -eq 1 ] ; then
+    notify-send "Reconfiguring monitors ..."
+    if [ $test -eq 0 ] ; then
+      moncfg-lite &
+    fi
+    stimer=30;
+  elif [ $ndcnt -ne $displaycnt ] ; then
+    notify-send "Reconfiguring monitors ..."
+    if [ $test -eq 0 ] ; then
+      moncfg-lite &
+    fi
+    displaycnt=$ndcnt
+    stimer=30;
+  fi
+  
+  if [ $noloop -eq 1 ] ; then
+    exit
+  fi
+  
+  # Pogledamo še, ali je compoziting šel off ter ga prižgimo nazaj:
+  
+  # Here we check if compositing went off. If compositing is off, we turn it back again.
+  # 
+  # At this point, you might ask yourself: "Hey Tam, why the hell are you using xdotool instead of the appropriate dbus 
+  # command?" 
+  # 
+  # Well, the thing is — dbus doesn't always work (At least it didn't at the time this was being written). `/Compositor resume`
+  # only resumes compositing when compositing was disabled with `/Compositor suspend`. While ultra-hackish and absolutely haram,
+  # the `xdotool` solution actually works all the time, most of the time. 
+  
+  if qdbus org.kde.KWin /KWin supportInformation | grep -q "alphaChannelSupported: false" ; then 
+    #echo "Compositing is off. Issuing this command: qdbus org.kde.KWin /Compositor resume"
+    #qdbus org.kde.KWin /Compositor resume
+    printf "$Blue$(date)$Color_Off | compositing is off. Issuing this command: xdotool key keystroke alt-shift-F12\n" >> /tmp/mond.log
+    
+    # I'm actually not sure whether both commands are needed and whether redirects are needed, but this worked well enough
+    # for a couple of months. Don't fix what ain't broken.
+    xdotool getactivewindow >> /tmp/mond.log
+    xdotool key keystroke alt+shift+F12 2>&1 1>> /tmp/mond.log
+  fi
+  
+  sleep $stimer;
+  mark_for_reconfig=0  # Nočemo se zatakniti v zanko neskončnega rekonfiguriranja.
+                       # Because we don't want to be stuck in a loop. 
+done
