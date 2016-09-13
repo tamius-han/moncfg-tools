@@ -112,6 +112,7 @@ This script started as a way to fix the mess that happens when you connect or di
 * checks whether display runs at its recommended resolution
 * restarts `kwin_x11` if it crashed
 * restarts `plasmashell` if it crashed
+* restarts `krunner` if it crashed
 * if compositing was turned off for any reason, it turns it back on. 
 
 `mondmond` monitors for `mond` crashes.
